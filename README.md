@@ -1,4 +1,4 @@
-# listeater [![Coverage Status](https://coveralls.io/repos/github/peterdeka/listeater/badge.svg?branch=master)](https://coveralls.io/github/peterdeka/listeater?branch=master)
+# listeater [![Build Status](https://travis-ci.org/peterdeka/listeater.svg?branch=master)](https://travis-ci.org/peterdeka/listeater) [![Coverage Status](https://coveralls.io/repos/github/peterdeka/listeater/badge.svg?branch=master)](https://coveralls.io/github/peterdeka/listeater?branch=master)
 A simple crawler aimed at eating paginated lists of elements.
 
 A lot of crawlers exist outside, however i needed a simple and configurable crawler to do the hard job of crawling different list types. 
