@@ -11,12 +11,14 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"regexp"
 	"sync"
 )
 
 var ErrInvalidConfig = errors.New("Invalid config, missing crawl ops.")
 var ErrNoLoginCreds = errors.New("No login credentials provided, login needed.")
 var ErrCannotLogin = errors.New("Could not login, check your credentials.")
+var urlRegex = regexp.MustCompile("(http|https)://([\\w_-]+(?:(?:\\.[\\w_-]+)+))([\\w.,@?^=%&:/~+#-]*[\\w@?^=%&/~+#-])?")
 
 type LoginDescriptor struct {
 	Url           string `json:"url"`
@@ -38,6 +40,7 @@ type ListEaterConfig struct {
 type CrawlResult struct {
 	Element interface{}
 	Error   error
+	Done    bool
 }
 
 //credentials for login (if needed)
@@ -78,6 +81,7 @@ func (le *ListEater) login(creds *LoginCredentials) error {
 
 //the main listeater function, does the actual crawling
 func (le *ListEater) Crawl(resChan chan CrawlResult, elementCrawler ElementCrawler, creds *LoginCredentials) error {
+	defer func() { resChan <- CrawlResult{Done: true} }() //will signal the results reader(on resChan) that we finished crawling
 	if le.CrawlDesc == nil {
 		return ErrInvalidConfig
 	}
@@ -129,6 +133,7 @@ func (le *ListEater) Crawl(resChan chan CrawlResult, elementCrawler ElementCrawl
 			return crawlErr
 		}
 	}
+
 	return nil
 }
 
@@ -142,7 +147,7 @@ func (le *ListEater) listPageCrawl(resp *http.Response, resChan chan CrawlResult
 		log.Println(err)
 		return err
 	}
-	//scoped function to follow the single eelemnt to be extracted
+	//scoped function to follow the single elemnt to be extracted
 	asyncFollow := func(elUrl string) {
 		defer wg.Done()
 		r, err := le.Client.Get(elUrl)
@@ -159,11 +164,16 @@ func (le *ListEater) listPageCrawl(resp *http.Response, resChan chan CrawlResult
 		fUrl, exists := s.Attr("href")
 		if !exists {
 			log.Println("Warning no href in follow")
-		} else {
-			//log.Println("Following: " + fUrl)
-			wg.Add(1)
-			go asyncFollow(fUrl)
+			return
 		}
+		fUrl = urlRegex.FindString(fUrl)
+		if fUrl == "" {
+			log.Println("Warning no url in href in follow")
+			return
+		}
+		//log.Println("Following: " + fUrl)
+		wg.Add(1)
+		go asyncFollow(fUrl)
 	})
 	wg.Wait()
 

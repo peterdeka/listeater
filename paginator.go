@@ -10,6 +10,7 @@ import (
 
 var ErrInvalidSelector = errors.New("Invalid selector for pagination.")
 var ErrNoHrefInPagination = errors.New("Pagination found but no href inside.")
+var ErrInvalidUrlHrefInPagination = errors.New("Pagination found but url in href not found.")
 
 //the interface that must be implemented to paginate from a page.
 //Returns request for next page, hasNext bool, and an error
@@ -38,8 +39,14 @@ func (hph HrefPaginationHandler) Paginate(r *http.Response) (*http.Request, bool
 	}
 	nextUrl, exist := np.Attr("href")
 	if !exist {
-		log.Println("WARNING: no href in xeturl")
+		log.Println("WARNING: no href matched pagination selelector")
 		return nil, false, ErrNoHrefInPagination
+	}
+	//extract a valid url
+	nextUrl = urlRegex.FindString(nextUrl)
+	if nextUrl == "" {
+		log.Println("WARNING: no valid url found in href")
+		return nil, false, ErrInvalidUrlHrefInPagination
 	}
 	log.Println("Next page: " + nextUrl)
 	req, _ := http.NewRequest("GET", nextUrl, nil)
