@@ -12,7 +12,9 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"sync"
 	"testing"
+	"time"
 )
 
 var oneElementTpl = `<html>
@@ -58,7 +60,6 @@ const userField = "username"
 const pwField = "pass"
 const user = "auser"
 const pw = "somepassword"
-const elPerPage = 8
 
 func TestMain(m *testing.M) {
 	setup()
@@ -69,7 +70,8 @@ func TestMain(m *testing.M) {
 //tests setup
 func setup() {
 	//generate some random elements
-	sz := rand.Intn(30) + 8
+	rand.Seed(time.Now().Unix())
+	sz := rand.Intn(90) + 20
 	elements = make([]testElement, sz)
 	for i := 0; i < sz; i++ {
 		fs_n := rand.Intn(5) + 1
@@ -82,6 +84,7 @@ func setup() {
 }
 
 func TestLoginCrawl(t *testing.T) {
+	elPerPage := rand.Intn(len(elements)/2) + 8
 	require := require.New(t)
 	hostUrl := ""
 	//build a mock backend service that will reply
@@ -115,10 +118,11 @@ func TestLoginCrawl(t *testing.T) {
 		els := elements[sliceIdx:min(sliceIdx+elPerPage, len(elements))]
 		t, _ := template.New("list").Parse(listTpl)
 
+		hasNext := false
 		if sliceIdx+elPerPage < len(elements) {
 			pIdx = pIdx + 1
+			hasNext = true
 		}
-		hasNext := sliceIdx+elPerPage < len(elements)
 		err = t.Execute(w, map[string]interface{}{
 			"items":    els,
 			"listurl":  listUrl,
@@ -157,26 +161,36 @@ func TestLoginCrawl(t *testing.T) {
 			PasswordField: pwField,
 		},
 		CrawlDesc: &CrawlDescriptor{
-			ListUrl:        hostUrl + "/" + listUrl,
-			PaginationLink: "#thepaginator a",
-			Element:        "li.listitem a",
-		}}
+			ListUrl: hostUrl + "/" + listUrl,
+			Element: "li.listitem a",
+		},
+		Paginator: &HrefPaginationHandler{
+			Selector: "#thepaginator a",
+		},
+	}
 	//crawl
 	result := []testElement{}
 	resChan := make(chan CrawlResult)
+	wg := sync.WaitGroup{}
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		for {
 			y := <-resChan
 			if y.Error != nil {
 				fmt.Println("Error")
+			} else if y.Done {
+				return
 			} else {
 				result = append(result, y.Element.(testElement))
 			}
 		}
 	}()
+
 	if err := le.Crawl(resChan, testElCrawler{}, &LoginCredentials{user: user, pass: pw}); err != nil {
 		fmt.Println(err)
 	}
+	wg.Wait()
 	require.Equal(len(elements), len(result))
 	fmt.Println("DONE")
 }

@@ -1,20 +1,24 @@
 package listeater
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"github.com/PuerkitoBio/goquery"
 	"golang.org/x/net/publicsuffix"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"regexp"
 	"sync"
 )
 
 var ErrInvalidConfig = errors.New("Invalid config, missing crawl ops.")
 var ErrNoLoginCreds = errors.New("No login credentials provided, login needed.")
 var ErrCannotLogin = errors.New("Could not login, check your credentials.")
+var urlRegex = regexp.MustCompile("(http|https)://([\\w_-]+(?:(?:\\.[\\w_-]+)+))([\\w.,@?^=%&:/~+#-]*[\\w@?^=%&/~+#-])?")
 
 type LoginDescriptor struct {
 	Url           string `json:"url"`
@@ -23,9 +27,8 @@ type LoginDescriptor struct {
 }
 
 type CrawlDescriptor struct {
-	ListUrl        string `json:"url"`
-	PaginationLink string `json:"pagination_link"`
-	Element        string `json:"element"`
+	ListUrl string `json:"url"`
+	Element string `json:"element"`
 }
 
 type ListEaterConfig struct {
@@ -37,6 +40,7 @@ type ListEaterConfig struct {
 type CrawlResult struct {
 	Element interface{}
 	Error   error
+	Done    bool
 }
 
 //credentials for login (if needed)
@@ -50,11 +54,12 @@ type ElementCrawler interface {
 	Extract(r *http.Response, resChan chan CrawlResult)
 }
 
-//the listeater tyoe, the main type of this package
+//the listeater type, the main type of this package
 type ListEater struct {
 	LoginDesc *LoginDescriptor
 	CrawlDesc *CrawlDescriptor
 	Client    *http.Client
+	Paginator PaginationHandler
 }
 
 //does the login and saves the cookie
@@ -76,6 +81,7 @@ func (le *ListEater) login(creds *LoginCredentials) error {
 
 //the main listeater function, does the actual crawling
 func (le *ListEater) Crawl(resChan chan CrawlResult, elementCrawler ElementCrawler, creds *LoginCredentials) error {
+	defer func() { resChan <- CrawlResult{Done: true} }() //will signal the results reader(on resChan) that we finished crawling
 	if le.CrawlDesc == nil {
 		return ErrInvalidConfig
 	}
@@ -98,40 +104,50 @@ func (le *ListEater) Crawl(resChan chan CrawlResult, elementCrawler ElementCrawl
 		}
 	}
 	//start the crawling fiesta
-	nextUrl := le.CrawlDesc.ListUrl
-	for nextUrl != "" {
-		r, crawlErr := le.Client.Get(nextUrl)
+	nextReq, _ := http.NewRequest("GET", le.CrawlDesc.ListUrl, nil)
+	hasNext := true
+	for hasNext {
+		r, crawlErr := le.Client.Do(nextReq)
 		if crawlErr != nil {
 			return errors.New("Error while crawling: " + crawlErr.Error())
 		} else if r.StatusCode != 200 {
 			fmt.Println(r.StatusCode)
 			return errors.New("Error while crawling ")
 		}
-		nextUrl, crawlErr = le.listPageCrawl(nextUrl, resChan, elementCrawler)
-		fmt.Println(nextUrl)
+		// Read the content
+		var bodyBytes []byte
+		if r.Body != nil {
+			bodyBytes, _ = ioutil.ReadAll(r.Body)
+		}
+		// Restore the io.ReadCloser to its original state
+		r.Body = ioutil.NopCloser(bytes.NewBuffer(bodyBytes))
+		crawlErr = le.listPageCrawl(r, resChan, elementCrawler)
+		// Restore the io.ReadCloser to its original state
+		r.Body = ioutil.NopCloser(bytes.NewBuffer(bodyBytes))
 		if crawlErr != nil {
 			return errors.New("Error while crawling: " + crawlErr.Error())
 		}
+		nextReq, hasNext, crawlErr = le.Paginator.Paginate(r)
+		if crawlErr != nil {
+			fmt.Println("pagination error")
+			return crawlErr
+		}
 	}
+
 	return nil
 }
 
 //crawls a single page (of the paginated list), returns the next url or error
-func (le *ListEater) listPageCrawl(url string, resChan chan CrawlResult, elementCrawler ElementCrawler) (nextUrl string, e error) {
-	log.Println("Processing " + url)
+func (le *ListEater) listPageCrawl(resp *http.Response, resChan chan CrawlResult, elementCrawler ElementCrawler) error {
+	log.Println("Processing ")
 	wg := sync.WaitGroup{}
-	resp, err := le.Client.Get(url)
-	if err != nil {
-		fmt.Println(err)
-		return "", err
-	}
 	doc, err := goquery.NewDocumentFromResponse(resp)
 	if err != nil {
 		log.Println("Will be fatal, error reading resp goquery scroll")
 		log.Println(err)
-		return "", err
+		return err
 	}
-	//scoped function to follow the single eelemnt to be extracted
+	//scoped function to follow the single elemnt to be extracted
 	asyncFollow := func(elUrl string) {
 		defer wg.Done()
 		r, err := le.Client.Get(elUrl)
@@ -148,24 +164,18 @@ func (le *ListEater) listPageCrawl(url string, resChan chan CrawlResult, element
 		fUrl, exists := s.Attr("href")
 		if !exists {
 			log.Println("Warning no href in follow")
-		} else {
-			//log.Println("Following: " + fUrl)
-			wg.Add(1)
-			go asyncFollow(fUrl)
+			return
 		}
+		fUrl = urlRegex.FindString(fUrl)
+		if fUrl == "" {
+			log.Println("Warning no url in href in follow")
+			return
+		}
+		//log.Println("Following: " + fUrl)
+		wg.Add(1)
+		go asyncFollow(fUrl)
 	})
 	wg.Wait()
-	np := doc.Find(le.CrawlDesc.PaginationLink).First()
-	if np == nil || len(np.Nodes) < 1 {
-		log.Println("no more pages") //this is good exit
-		return "", nil
-	}
-	exist := false
-	nextUrl, exist = np.Attr("href")
-	if !exist {
-		log.Println("WARNING: no href in xeturl")
-		return "", nil
-	}
-	log.Println("Next page: " + nextUrl)
-	return nextUrl, nil
+
+	return nil
 }
