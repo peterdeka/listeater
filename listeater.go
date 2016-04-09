@@ -70,6 +70,7 @@ func (le *ListEater) login(creds *LoginCredentials) error {
 		fmt.Println(r.StatusCode)
 		return ErrCannotLogin
 	}
+	fmt.Println("Successfully logged in")
 	return nil
 }
 
@@ -100,12 +101,16 @@ func (le *ListEater) Crawl(resChan chan CrawlResult, elementCrawler ElementCrawl
 	nextUrl := le.CrawlDesc.ListUrl
 	for nextUrl != "" {
 		r, crawlErr := le.Client.Get(nextUrl)
-		if crawlErr != nil || r.StatusCode != 200 {
-			return errors.New("Error while crawling: " + err.Error())
+		if crawlErr != nil {
+			return errors.New("Error while crawling: " + crawlErr.Error())
+		} else if r.StatusCode != 200 {
+			fmt.Println(r.StatusCode)
+			return errors.New("Error while crawling ")
 		}
 		nextUrl, crawlErr = le.listPageCrawl(nextUrl, resChan, elementCrawler)
+		fmt.Println(nextUrl)
 		if crawlErr != nil {
-			return errors.New("Error while crawling: " + err.Error())
+			return errors.New("Error while crawling: " + crawlErr.Error())
 		}
 	}
 	return nil
@@ -144,7 +149,7 @@ func (le *ListEater) listPageCrawl(url string, resChan chan CrawlResult, element
 		if !exists {
 			log.Println("Warning no href in follow")
 		} else {
-			log.Println("Following: " + fUrl)
+			//log.Println("Following: " + fUrl)
 			wg.Add(1)
 			go asyncFollow(fUrl)
 		}
