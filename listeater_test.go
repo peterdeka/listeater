@@ -157,10 +157,13 @@ func TestLoginCrawl(t *testing.T) {
 			PasswordField: pwField,
 		},
 		CrawlDesc: &CrawlDescriptor{
-			ListUrl:        hostUrl + "/" + listUrl,
-			PaginationLink: "#thepaginator a",
-			Element:        "li.listitem a",
-		}}
+			ListUrl: hostUrl + "/" + listUrl,
+			Element: "li.listitem a",
+		},
+		Paginator: &HrefPaginationHandler{
+			Selector: "#thepaginator a",
+		},
+	}
 	//crawl
 	result := []testElement{}
 	resChan := make(chan CrawlResult)
